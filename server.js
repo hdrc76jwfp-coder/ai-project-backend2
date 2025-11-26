@@ -1,88 +1,63 @@
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+import google.generativeai as genai
+import os
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from agent import Copilot
 
-import express from "express";
-import cors from "cors";
-import multer from "multer";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+# Load environment variables (for GOOGLE_API_KEY)
+load_dotenv()
 
-const app = express();
+# Configure the Gemini API
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-// allow frontend to call this backend
-app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+# FastAPI app
+app = FastAPI()
 
-// for image uploads
-const upload = multer();
+# CORS so your web UI can call this backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # you can restrict later
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-// make sure the API key exists
-if (!process.env.GEMINI_API_KEY) {
-  console.error("❌ GEMINI_API_KEY is not set");
-}
+# Your custom Copilot brain (uses prompts.py + memory_manager.py)
+bot = Copilot()
 
-// init Gemini client
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+# --- Models ----
+class ChatRequest(BaseModel):
+    text: str
 
-// text model (you can change to gemini-1.5-pro if you want)
-const textModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-// same model handles vision
-const visionModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+# --- Health check (for uptime robot / “is it awake?”) ---
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
-// health check route
-app.get("/health", (req, res) => {
-  res.send("OK");
-});
+# --- TEXT CHAT ---
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    reply = bot.run(request.text)
+    return {"reply": reply}
 
-// TEXT CHAT -----------------------------------------
-app.post("/chat", async (req, res) => {
-  try {
-    const { text, message } = req.body || {};
-    const userMessage = text || message;
+# --- IMAGE / VISION ---
+@app.post("/vision")
+async def vision(file: UploadFile = File(...)):
+    image_data = await file.read()
 
-    if (!userMessage) {
-      return res.status(400).json({ error: "No message provided" });
-    }
+    model = genai.GenerativeModel("models/gemini-2.5-pro")
 
-    console.log("💬 User:", userMessage);
+    response = model.generate_content(
+        contents=[
+            {
+                "role": "user",
+                "parts": [
+                    "Explain this image in detail:",
+                    {"mime_type": file.content_type, "data": image_data},
+                ],
+            }
+        ]
+    )
 
-    const result = await textModel.generateContent(userMessage);
-    const reply = result.response.text();
-
-    console.log("🤖 Bot:", reply);
-
-    res.json({ reply });
-  } catch (err) {
-    console.error("Error in /chat:", err);
-    res.status(500).json({ error: "Error talking to Gemini" });
-  }
-});
-
-// IMAGE / VISION ------------------------------------
-app.post("/vision", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
-
-    const image = {
-      inlineData: {
-        data: req.file.buffer.toString("base64"),
-        mimeType: req.file.mimetype,
-      },
-    };
-
-    const prompt = "You are My Copilot. Analyse this image and explain it clearly.";
-
-    const result = await visionModel.generateContent([prompt, image]);
-    const reply = result.response.text();
-
-    res.json({ reply });
-  } catch (err) {
-    console.error("Error in /vision:", err);
-    res.status(500).json({ error: "Error analyzing image with Gemini" });
-  }
-});
-
-// PORT from Render
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+    return {"reply": response.text}
