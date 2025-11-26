@@ -14,12 +14,13 @@ app.get("/health", (req, res) => {
 
 // main chat route
 app.post("/chat", (req, res) => {
-  const { message } = req.body || {};
-  console.log("Received message:", message);
+  const { text, message } = req.body || {};
+  const userMessage = text || message;
 
-  // simple reply so we know it's working
+  console.log("Received message:", userMessage);
+
   res.json({
-    reply: "Backend is working. You said: " + (message || "<no message>")
+    reply: "Backend is working. You said: " + (userMessage || "<no message>")
   });
 });
 
